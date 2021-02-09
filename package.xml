@@ -32,7 +32,7 @@ A web frontend exists for manipulating the data stored in database at: https://g
  </lead>
  <date>2017-02-13</date>
  <version>
-  <release>2.1.2</release>
+  <release>2.2</release>
   <api>2.0.0</api>
  </version>
  <stability>
@@ -42,10 +42,7 @@ A web frontend exists for manipulating the data stored in database at: https://g
  <license uri="http://www.php.net/license">PHP License</license>
  <notes>
 Fixed:
-- Wrong path for mysql.h prevents Windows build
-- Possible segmentation fault and invalid errors under PHP 7.0
-- Make error: duplicate symbol for architecture x86_64 #25
-- Build with PHP 7.1 #44 (Thanks Remi Collet)
+- Pantheon removed the Thread Safe macros that were causing errors with PHP8 builds.
  </notes>
  <contents>
   <dir name="/">
@@ -91,7 +88,7 @@ Fixed:
  <changelog>
   <release>
    <version>
-    <release>2.1.2</release>
+    <release>2.3</release>
     <api>2.0.0</api>
    </version>
    <stability>
@@ -102,7 +99,23 @@ Fixed:
    <license uri="http://www.php.net/license">PHP License</license>
    <notes>
 Fixed:
-- Wrong path for mysql.h prevents Windows build
+- Should build with PHP 8 now
+   </notes>
+  </release>
+  <release>
+   <version>
+    <release>2.2</release>
+    <api>2.0.0</api>
+   </version>
+   <stability>
+    <release>stable</release>
+    <api>stable</api>
+   </stability>
+   <date>2021-2-10</date>
+   <license uri="http://www.php.net/license">PHP License</license>
+   <notes>
+Fixed:
+- Should compile with PHP 8 now
    </notes>
   </release>
   <release>

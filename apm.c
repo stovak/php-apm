@@ -114,9 +114,9 @@ void (*old_error_cb)(int type, const char *error_filename, const uint error_line
 
 void apm_error_cb(int type, const char *error_filename, const uint error_lineno, const char *format, va_list args);
 
-void apm_throw_exception_hook(zval *exception TSRMLS_DC);
+void apm_throw_exception_hook(zval *exception );
 
-static void process_event(int, int, char *, uint, char * TSRMLS_DC);
+static void process_event(int, int, char *, uint, char *);
 
 /* recorded timestamp for the request */
 struct timeval begin_tp;
@@ -152,8 +152,10 @@ PHP_INI_BEGIN()
 	STD_PHP_INI_ENTRY("apm.application_id", "My application", PHP_INI_ALL, OnUpdateString, application_id, zend_apm_globals, apm_globals)
 	/* Boolean controlling whether the event monitoring is active or not */
 	STD_PHP_INI_BOOLEAN("apm.event_enabled", "1", PHP_INI_ALL, OnUpdateBool, event_enabled, zend_apm_globals, apm_globals)
+#if PHP_VERSION_ID < 70000
 	/* Boolean controlling whether the stacktrace should be stored or not */
 	STD_PHP_INI_BOOLEAN("apm.store_stacktrace", "1", PHP_INI_ALL, OnUpdateBool, store_stacktrace, zend_apm_globals, apm_globals)
+#endif
 	/* Boolean controlling whether the ip should be stored or not */
 	STD_PHP_INI_BOOLEAN("apm.store_ip", "1", PHP_INI_ALL, OnUpdateBool, store_ip, zend_apm_globals, apm_globals)
 	/* Boolean controlling whether the cookies should be stored or not */
@@ -250,11 +252,11 @@ static PHP_GINIT_FUNCTION(apm)
 	apm_globals->buffer = NULL;
 	apm_globals->drivers = (apm_driver_entry *) malloc(sizeof(apm_driver_entry));
 	apm_globals->drivers->driver.process_event = (void (*)(PROCESS_EVENT_ARGS)) NULL;
-	apm_globals->drivers->driver.process_stats = (void (*)(TSRMLS_D)) NULL;
-	apm_globals->drivers->driver.minit = (int (*)(int TSRMLS_DC)) NULL;
-	apm_globals->drivers->driver.rinit = (int (*)(TSRMLS_D)) NULL;
+	apm_globals->drivers->driver.process_stats = (void (*)()) NULL;
+	apm_globals->drivers->driver.minit = (int (*)(int )) NULL;
+	apm_globals->drivers->driver.rinit = (int (*)()) NULL;
 	apm_globals->drivers->driver.mshutdown = (int (*)()) NULL;
-	apm_globals->drivers->driver.rshutdown = (int (*)(TSRMLS_D)) NULL;
+	apm_globals->drivers->driver.rshutdown = (int (*)()) NULL;
 
 	next = &apm_globals->drivers->next;
 	*next = (apm_driver_entry *) NULL;
@@ -303,7 +305,7 @@ PHP_MINIT_FUNCTION(apm)
 
 		driver_entry = APM_G(drivers);
 		while ((driver_entry = driver_entry->next) != NULL) {
-			if (driver_entry->driver.minit(module_number TSRMLS_CC) == FAILURE) {
+			if (driver_entry->driver.minit(module_number ) == FAILURE) {
 				return FAILURE;
 			}
 		}
@@ -364,8 +366,8 @@ PHP_RINIT_FUNCTION(apm)
 		APM_DEBUG("Registering drivers\n");
 		driver_entry = APM_G(drivers);
 		while ((driver_entry = driver_entry->next) != NULL) {
-			if (driver_entry->driver.is_enabled(TSRMLS_C)) {
-				if (driver_entry->driver.rinit(TSRMLS_C)) {
+			if (driver_entry->driver.is_enabled()) {
+				if (driver_entry->driver.rinit()) {
 					return FAILURE;
 				}
 			}
@@ -395,7 +397,7 @@ PHP_RSHUTDOWN_FUNCTION(apm)
 
 		driver_entry = APM_G(drivers);
 		while ((driver_entry = driver_entry->next) != NULL && stats_enabled == 0) {
-			stats_enabled = driver_entry->driver.want_stats(TSRMLS_C);
+			stats_enabled = driver_entry->driver.want_stats();
 		}
 
 		if (stats_enabled) {
@@ -403,7 +405,7 @@ PHP_RSHUTDOWN_FUNCTION(apm)
 
 			/* Request longer than accepted threshold ? */
 			APM_G(duration) = (float) (SEC_TO_USEC(end_tp.tv_sec - begin_tp.tv_sec) + end_tp.tv_usec - begin_tp.tv_usec);
-			APM_G(mem_peak_usage) = zend_memory_peak_usage(1 TSRMLS_CC);
+			APM_G(mem_peak_usage) = zend_memory_peak_usage(1 );
 #ifdef HAVE_GETRUSAGE
 			memset(&usg, 0, sizeof(struct rusage));
 
@@ -423,8 +425,8 @@ PHP_RSHUTDOWN_FUNCTION(apm)
 				driver_entry = APM_G(drivers);
 				APM_DEBUG("Stats loop begin\n");
 				while ((driver_entry = driver_entry->next) != NULL) {
-					if (driver_entry->driver.want_stats(TSRMLS_C)) {
-						driver_entry->driver.process_stats(TSRMLS_C);
+					if (driver_entry->driver.want_stats()) {
+						driver_entry->driver.process_stats();
 					}
 				}
 				APM_DEBUG("Stats loop end\n");
@@ -433,8 +435,8 @@ PHP_RSHUTDOWN_FUNCTION(apm)
 
 		driver_entry = APM_G(drivers);
 		while ((driver_entry = driver_entry->next) != NULL) {
-			if (driver_entry->driver.is_enabled(TSRMLS_C)) {
-				if (driver_entry->driver.rshutdown(TSRMLS_C) == FAILURE) {
+			if (driver_entry->driver.is_enabled()) {
+				if (driver_entry->driver.rshutdown() == FAILURE) {
 					code = FAILURE;
 				}
 			}
@@ -468,7 +470,8 @@ PHP_MINFO_FUNCTION(apm)
 	This function provides a hook for error */
 void apm_error_cb(int type, const char *error_filename, const uint error_lineno, const char *format, va_list args)
 {
-	char *msg;
+  static unsigned int depth = 0;
+  char *msg;
 	va_list args_copy;
 	TSRMLS_FETCH();
 
@@ -477,8 +480,10 @@ void apm_error_cb(int type, const char *error_filename, const uint error_lineno,
 	vspprintf(&msg, 0, format, args_copy);
 	va_end(args_copy);
 
-	if (APM_G(event_enabled)) {
-		process_event(APM_EVENT_ERROR, type, (char *) error_filename, error_lineno, msg TSRMLS_CC);
+	if (APM_G(event_enabled) && depth < 2) {
+		++depth;
+		process_event(APM_EVENT_ERROR, type, (char *) error_filename, error_lineno, msg , depth);
+		--depth;
 	}
 	efree(msg);
 
@@ -487,12 +492,12 @@ void apm_error_cb(int type, const char *error_filename, const uint error_lineno,
 /* }}} */
 
 
-void apm_throw_exception_hook(zval *exception TSRMLS_DC)
+void apm_throw_exception_hook(zval *exception )
 {
-	zval *message, *file, *line;
 #if PHP_VERSION_ID >= 70000
 	zval rv;
 #endif
+	zval *message, *file, *line;
 	zend_class_entry *default_ce;
 
 	if (APM_G(event_enabled)) {
@@ -507,43 +512,44 @@ void apm_throw_exception_hook(zval *exception TSRMLS_DC)
 		file = zend_read_property(default_ce, exception, "file", sizeof("file")-1, 0, &rv);
 		line = zend_read_property(default_ce, exception, "line", sizeof("line")-1, 0, &rv);
 #else
-		default_ce = zend_exception_get_default(TSRMLS_C);
+		default_ce = zend_exception_get_default();
 
-		message = zend_read_property(default_ce, exception, "message", sizeof("message")-1, 0 TSRMLS_CC);
-		file = zend_read_property(default_ce, exception, "file", sizeof("file")-1, 0 TSRMLS_CC);
-		line = zend_read_property(default_ce, exception, "line", sizeof("line")-1, 0 TSRMLS_CC);
+		message = zend_read_property(default_ce, exception, "message", sizeof("message")-1, 0 );
+		file = zend_read_property(default_ce, exception, "file", sizeof("file")-1, 0 );
+		line = zend_read_property(default_ce, exception, "line", sizeof("line")-1, 0 );
 #endif
-
-		process_event(APM_EVENT_EXCEPTION, E_EXCEPTION, Z_STRVAL_P(file), Z_LVAL_P(line), Z_STRVAL_P(message) TSRMLS_CC);
+		process_event(APM_EVENT_EXCEPTION, E_EXCEPTION, Z_STRVAL_P(file), Z_LVAL_P(line), Z_STRVAL_P(message) , 0);
 	}
 }
 
 /* Insert an event in the backend */
-static void process_event(int event_type, int type, char * error_filename, uint error_lineno, char * msg TSRMLS_DC)
+static void process_event(int event_type, int type, char * error_filename, uint error_lineno, char * msg , unsigned int depth)
 {
 	smart_str trace_str = {0};
 	apm_driver_entry * driver_entry;
 
-	if (APM_G(store_stacktrace)) {
-		append_backtrace(&trace_str TSRMLS_CC);
+#if PHP_VERSION_ID < 70000
+	if (APM_G(store_stacktrace) && 0 == depth) {
+		append_backtrace(&trace_str );
 		smart_str_0(&trace_str);
 	}
+#endif
 
 	driver_entry = APM_G(drivers);
 	APM_DEBUG("Direct processing process_event loop begin\n");
 	while ((driver_entry = driver_entry->next) != NULL) {
-		if (driver_entry->driver.want_event(event_type, type, msg TSRMLS_CC)) {
+		if (driver_entry->driver.want_event(event_type, type, msg )) {
 			driver_entry->driver.process_event(
 				type,
 				error_filename,
 				error_lineno,
 				msg,
 #if PHP_VERSION_ID >= 70000
-				(APM_G(store_stacktrace) && trace_str.s && trace_str.s->val) ? trace_str.s->val : ""
+				""
 #else
 				(APM_G(store_stacktrace) && trace_str.c) ? trace_str.c : ""
 #endif
-				TSRMLS_CC
+				
 			);
 		}
 	}
@@ -570,7 +576,7 @@ static void process_event(int event_type, int type, char * error_filename, uint 
 #define FETCH_HTTP_GLOBALS(name) (tmp = PG(http_globals)[TRACK_VARS_##name])
 #endif
 
-void extract_data(TSRMLS_D)
+void extract_data()
 {
 	zval *tmp;
 
@@ -607,7 +613,7 @@ void extract_data(TSRMLS_D)
 				zend_string_release(tmpstr);
 #else
 				APM_G(buffer) = &APM_RD(cookies);
-				zend_print_zval_r_ex(apm_write, tmp, 0 TSRMLS_CC);
+				zend_print_zval_r_ex(apm_write, tmp, 0 );
 #endif
 				APM_RD(cookies_found) = 1;
 			}
@@ -624,7 +630,7 @@ void extract_data(TSRMLS_D)
 				zend_string_release(tmpstr);
 #else
 				APM_G(buffer) = &APM_RD(post_vars);
-				zend_print_zval_r_ex(apm_write, tmp, 0 TSRMLS_CC);
+				zend_print_zval_r_ex(apm_write, tmp, 0 );
 #endif
 				APM_RD(post_vars_found) = 1;
 			}
